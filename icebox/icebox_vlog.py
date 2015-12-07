@@ -792,9 +792,34 @@ for lut in luts_queue:
         net_clk = seg_to_net((lut[0], lut[1], "lutff_global/clk"), "1'b0")
         net_sr  = seg_to_net((lut[0], lut[1], "lutff_global/s_r"), "1'b0")
         if seq_bits[3] == "0":
-            always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s) if (%s) %s <= %s ? 1'b%s : %s;" %
-                    (lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
-                    net_clk, net_cen, net_out, net_sr, seq_bits[2], net_lout))
+            if net_cen == "1'b1":
+                if net_sr == "1'b1":
+                    #XXX: Shouldn't happen, but in case it does...
+                    always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s) %s <= 1'b%s;" %
+                            (lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
+                            net_clk, net_out, seq_bits[2]))
+                elif net_sr == "1'b0":
+                    always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s) %s <= %s;" %
+                            (lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
+                            net_clk, net_out, net_lout))
+                else:
+                    always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s) %s <= %s ? 1'b%s : %s;" %
+                            (lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
+                            net_clk, net_out, net_sr, seq_bits[2], net_lout))
+            else:
+                if net_sr == "1'b1":
+                    #XXX: Shouldn't happen, but in case it does...
+                    always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s) if (%s) %s <= 1'b%s;" %
+                            (lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
+                            net_clk, net_cen, net_out, seq_bits[2]))
+                elif net_sr == "1'b0":
+                    always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s) if (%s) %s <= %s;" %
+                            (lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
+                            net_clk, net_cen, net_out, net_lout))
+                else:
+                    always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s) if (%s) %s <= %s ? 1'b%s : %s;" %
+                            (lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
+                            net_clk, net_cen, net_out, net_sr, seq_bits[2], net_lout))
         else:
             always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s, posedge %s) if (%s) %s <= 1'b%s; else if (%s) %s <= %s;" %
                     (lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
