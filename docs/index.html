@@ -5,6 +5,7 @@
 <h1>Project IceStorm</h1>
 
 <p>
+<b>2015-12-27:</b> <a href="http://www.clifford.at/papers/2015/icestorm-flow/">Presentation</a> of the IceStorm flow at 32C3 (<a href="https://www.youtube.com/watch?v=9rYiGDDUIzg">Video on Youtube</a>).<br/>
 <b>2015-07-19:</b> Released support for 8k chips. Moved IceStorm source code to GitHub.<br/>
 <b>2015-05-27:</b> We have a working fully Open Source flow with <a href="http://www.clifford.at/yosys/">Yosys</a> and <a href="https://github.com/cseed/arachne-pnr">Arachne-pnr</a>! Video: <a href="http://youtu.be/yUiNlmvVOq8">http://youtu.be/yUiNlmvVOq8</a><br/>
 <b>2015-04-13:</b> Complete rewrite of IceUnpack, added IcePack, some major documentation updates<br/>
@@ -60,8 +61,8 @@ arachne-pnr</a> (this example targets the iCEstick development board):
 </p>
 
 <pre style="padding-left: 3em">yosys -p "synth_ice40 -blif rot.blif" rot.v
-arachne-pnr -d 1k -p rot.pcf rot.blif -o rot.txt
-icepack rot.txt rot.bin
+arachne-pnr -d 1k -p rot.pcf rot.blif -o rot.asc
+icepack rot.asc rot.bin
 iceprog rot.bin</pre>
 
 <h2>Where are the Tools? How to install?</h2>
@@ -106,6 +107,19 @@ sudo make install</pre>
 <p>
 Note: The Arachne-PNR build depends on files installed by IceStorm. Always rebuild Arachne-PNR
 after updating your IceStorm installation.
+</p>
+
+<p>
+<b>Notes for Archlinux:</b> just install <a href="https://aur.archlinux.org/packages/icestorm-git/">icestorm-git</a>, <a href="https://aur.archlinux.org/packages/arachne-pnr-git/">arachne-pnr-git</a> and <a href="https://aur.archlinux.org/packages/yosys-git/">yosys-git</a> from the Arch User Repository (no need to follow the install instructions above).
+</p>
+
+<p>
+<b>Notes for OSX:</b> Please follow the <a href="notes_osx.html">additional instructions for OSX</a> to install on OSX.
+</p>
+
+<p>
+Please <a href="https://github.com/cliffordwolf/icestorm/issues/new">file an issue on github</a> if you have additional notes to
+share regarding the install procedures on the operating system of your choice.
 </p>
 
 <h2>What are the IceStorm Tools?</h2>
@@ -249,16 +263,16 @@ And run them through Yosys, Arachne-PNR and IcePack:
 </p>
 
 <pre style="padding-left: 3em">$ yosys -p 'synth_ice40 -top top -blif example.blif' example.v
-$ arachne-pnr -d 1k -o example.txt -p example.pcf example.blif
-$ icepack example.txt example.bin
+$ arachne-pnr -d 1k -o example.asc -p example.pcf example.blif
+$ icepack example.asc example.bin
 </pre>
 
 <p>
 We would get something like the following <span style="font-family:monospace">icebox_explain</span> output:
 </p>
 
-<pre style="padding-left: 3em">$ icebox_explain example.txt
-Reading file 'example.txt'..
+<pre style="padding-left: 3em">$ icebox_explain example.asc
+Reading file 'example.asc'..
 Fabric size (without IO tiles): 12 x 16
 
 .io_tile 0 10
@@ -294,8 +308,8 @@ buffer sp4_h_r_24 local_g3_0</pre>
 And something like the following <span style="font-family:monospace">icebox_vlog</span> output:
 </p>
 
-<pre style="padding-left: 3em">$ icebox_vlog -p example.pcf example.txt
-// Reading file 'example.txt'..
+<pre style="padding-left: 3em">$ icebox_vlog -p example.pcf example.asc
+// Reading file 'example.asc'..
 
 module chip (output y, input b, input a);
 
@@ -364,6 +378,7 @@ Links to related projects. Contact me at clifford@clifford.at if you have an int
 <li><a href="https://hackaday.io/project/6636-iced-an-arduino-style-board-with-ice-fpga">ICEd = an Arduino Style Board, with ICE FPGA</a>
 <li><a href="https://github.com/Obijuan/open-fpga-verilog-tutorial/wiki">A Spanish FPGA Tutorial using IceStorm</a>
 <li><a href="https://hackaday.io/project/7982-cat-board">CAT Board</a>
+<li><a href="http://opencores.org/project,ecowlogic-pico">eCow-Logic pico-ITX Lattice ICE40 board</a>
 </ul>
 
 <hr>
