@@ -753,6 +753,7 @@ wire_to_reg = set()
 lut_assigns = list()
 const_assigns = list()
 carry_assigns = list()
+clk_dict = dict()
 always_stmts = list()
 max_net_len = 0
 
@@ -792,34 +793,10 @@ for lut in luts_queue:
         net_clk = seg_to_net((lut[0], lut[1], "lutff_global/clk"), "1'b0")
         net_sr  = seg_to_net((lut[0], lut[1], "lutff_global/s_r"), "1'b0")
         if seq_bits[3] == "0":
-            if net_cen == "1'b1":
-                if net_sr == "1'b1":
-                    #XXX: Shouldn't happen, but in case it does...
-                    always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s) %s <= 1'b%s;" %
-                            (lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
-                            net_clk, net_out, seq_bits[2]))
-                elif net_sr == "1'b0":
-                    always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s) %s <= %s;" %
-                            (lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
-                            net_clk, net_out, net_lout))
-                else:
-                    always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s) %s <= %s ? 1'b%s : %s;" %
-                            (lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
-                            net_clk, net_out, net_sr, seq_bits[2], net_lout))
-            else:
-                if net_sr == "1'b1":
-                    #XXX: Shouldn't happen, but in case it does...
-                    always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s) if (%s) %s <= 1'b%s;" %
-                            (lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
-                            net_clk, net_cen, net_out, seq_bits[2]))
-                elif net_sr == "1'b0":
-                    always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s) if (%s) %s <= %s;" %
-                            (lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
-                            net_clk, net_cen, net_out, net_lout))
-                else:
-                    always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s) if (%s) %s <= %s ? 1'b%s : %s;" %
-                            (lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
-                            net_clk, net_cen, net_out, net_sr, seq_bits[2], net_lout))
+            if not net_clk in clk_dict:
+                clk_dict[net_clk] = []
+            clk_dict[net_clk].append([lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
+                                net_clk, net_cen, net_out, net_sr, seq_bits[2], net_lout])
         else:
             always_stmts.append("/* FF %2d %2d %2d */ always @(%sedge %s, posedge %s) if (%s) %s <= 1'b%s; else if (%s) %s <= %s;" %
                     (lut[0], lut[1], lut[2], "neg" if icebox.get_negclk_bit(tile) == "1" else "pos",
@@ -926,6 +903,46 @@ for line in text_func:
     print(line)
 for line in always_stmts:
     print(line)
+for net_clk in clk_dict:
+    #TODO:This could be wrong since we really don't know
+    # on which edge the FF triggers.
+    print("always @(posedge %s) begin" % net_clk)
+    for ilist in clk_dict[net_clk]:
+        lut = [0,0,0]
+        seq_bit = [0,0,0]
+        lut[0] = ilist[0]
+        lut[1] = ilist[1]
+        lut[2] = ilist[2]
+        "neg" if icebox.get_negclk_bit(tile) == "1" else "pos"
+        net_clk = ilist[4]
+        net_cen = ilist[5]
+        net_out = ilist[6]
+        net_sr = ilist[7]
+        seq_bits[2] = ilist[8]
+        net_lout = ilist[9]
+        if net_cen == "1'b1":
+            if net_sr == "1'b1":
+                #XXX: Shouldn't happen, but in case it does...
+                print("/* FF %2d %2d %2d */ %s <= 1'b%s;" %
+                        (lut[0], lut[1], lut[2], net_out, seq_bits[2]))
+            elif net_sr == "1'b0":
+                print("/* FF %2d %2d %2d */ %s <= %s;" %
+                        (lut[0], lut[1], lut[2], net_out, net_lout))
+            else:
+                print("/* FF %2d %2d %2d */ %s <= %s ? 1'b%s : %s;" %
+                        (lut[0], lut[1], lut[2], net_out, net_sr, seq_bits[2], net_lout))
+        else:
+            if net_sr == "1'b1":
+                #XXX: Shouldn't happen, but in case it does...
+                print("/* FF %2d %2d %2d */ if (%s) %s <= 1'b%s;" %
+                        (lut[0], lut[1], lut[2], net_cen, net_out, seq_bits[2]))
+            elif net_sr == "1'b0":
+                print("/* FF %2d %2d %2d */ if (%s) %s <= %s;" %
+                        (lut[0], lut[1], lut[2], net_cen, net_out, net_lout))
+            else:
+                print("/* FF %2d %2d %2d */ if (%s) %s <= %s ? 1'b%s : %s;" %
+                        (lut[0], lut[1], lut[2], net_cen, net_out, net_sr, seq_bits[2], net_lout))
+    print("end")
 print()
 
 for p in unmatched_ports:
