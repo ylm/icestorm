@@ -17,6 +17,7 @@ TESTS += fflogic
 TESTS += ram40
 TESTS += mem
 TESTS += pll
+TESTS += aig
 
 EIGTHK = _8k
 
@@ -40,13 +41,13 @@ endif
 timings:
 ifeq ($(EIGTHK),_8k)
 	cp tmedges_8k.txt tmedges.tmp
-	for f in work_*/*.vsb; do echo $$f; yosys -q -f verilog -s tmedges.ys $$f; done
+	set -e; for f in work_*/*.vsb; do echo $$f; yosys -q -f verilog -s tmedges.ys $$f; done
 	sort -u tmedges.tmp > tmedges_8k.txt && rm -f tmedges.tmp
 	python3 timings.py -t timings_8k.txt work_*/*.sdf > timings_8k.new
 	mv timings_8k.new timings_8k.txt
 else
 	cp tmedges_1k.txt tmedges.tmp
-	for f in work_*/*.vsb; do echo $$f; yosys -q -f verilog -s tmedges.ys $$f; done
+	set -e; for f in work_*/*.vsb; do echo $$f; yosys -q -f verilog -s tmedges.ys $$f; done
 	sort -u tmedges.tmp > tmedges_1k.txt && rm -f tmedges.tmp
 	python3 timings.py -t timings_1k.txt work_*/*.sdf > timings_1k.new
 	mv timings_1k.new timings_1k.txt
@@ -54,6 +55,7 @@ endif
 
 timings_html:
 	python3 timings.py -h tmedges_1k.txt -t timings_1k.txt -l "HX1K with default temp/volt settings" > timings_1k.html
+	python3 timings.py -h tmedges_8k.txt -t timings_8k.txt -l "HX8K with default temp/volt settings" > timings_8k.html
 
 data_cached.txt: cached_io.txt cached_logic.txt cached_ramb$(EIGTHK).txt cached_ramt$(EIGTHK).txt
 	gawk '{ print "io", $$0; }' cached_io.txt > data_cached.new

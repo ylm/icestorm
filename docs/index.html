@@ -5,6 +5,7 @@
 <h1>Project IceStorm</h1>
 
 <p>
+<b>2016-01-17:</b> First release of IceTime timing analysis. Video: <a href="https://youtu.be/IG5CpFJRnOk">https://youtu.be/IG5CpFJRnOk</a><br/>
 <b>2015-12-27:</b> <a href="http://www.clifford.at/papers/2015/icestorm-flow/">Presentation</a> of the IceStorm flow at 32C3 (<a href="https://www.youtube.com/watch?v=9rYiGDDUIzg">Video on Youtube</a>).<br/>
 <b>2015-07-19:</b> Released support for 8k chips. Moved IceStorm source code to GitHub.<br/>
 <b>2015-05-27:</b> We have a working fully Open Source flow with <a href="http://www.clifford.at/yosys/">Yosys</a> and <a href="https://github.com/cseed/arachne-pnr">Arachne-pnr</a>! Video: <a href="http://youtu.be/yUiNlmvVOq8">http://youtu.be/yUiNlmvVOq8</a><br/>
@@ -130,6 +131,13 @@ share regarding the install procedures on the operating system of your choice.
 The <span style="font-family:monospace">iceunpack</span> program converts an iCE40 <span style="font-family:monospace">.bin</span> file into the IceBox ASCII format
 that has blocks of <span style="font-family:monospace">0</span> and <span style="font-family:monospace">1</span> for the config bits for each tile in the chip. The
 <span style="font-family:monospace">icepack</span> program converts such an ASCII file back to an iCE40 <span style="font-family:monospace">.bin</span> file.
+</p>
+
+<h3>IceTime</h3>
+
+<p>
+The <span style="font-family:monospace">icetime</span> program is an iCE40 timing analysis tool. It reads designs in IceBox ASCII format and writes times timing
+netlists that can be used in external timing analysers. It also includes a simple topological timing analyser that can be used to create timing reports.
 </p>
 
 <h3>IceBox</h3>
@@ -398,7 +406,7 @@ e.g. using the following BibTeX code:
 
 <p>
 <i>Documentation mostly by Clifford Wolf &lt;clifford@clifford.at&gt; in 2015. Based on research by Mathias Lasser and Clifford Wolf.<br/>
-Buy an <a href="http://www.latticesemi.com/icestick">iCEstick</a> from Lattice and see what you can do with the information provided here. Buy a few because you might break some..</i>
+Buy an <a href="http://www.latticesemi.com/icestick">iCEstick</a> from Lattice and see what you can do with the information provided here.</i>
 </p>
 
 </body></html>

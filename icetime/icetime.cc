@@ -28,9 +28,12 @@
 #include <map>
 #include <set>
 
-#define MAX_SPAN_HACK 1
+// add this number of ns as estimate for clock distribution mismatch
+#define GLOBAL_CLK_DIST_JITTER 0.1
 
-FILE *fin, *fout;
+FILE *fin = nullptr, *fout = nullptr, *frpt = nullptr;
+bool verbose = false;
+bool max_span_hack = false;
 
 std::string config_device, selected_package;
 std::vector<std::vector<std::string>> config_tile_type;
@@ -39,6 +42,8 @@ std::map<std::tuple<int, int, int>, std::string> pin_pos;
 std::map<std::string, std::string> pin_names;
 std::set<std::tuple<int, int, int>> extra_bits;
 std::set<std::string> io_names;
+
+std::map<int, std::string> net_symbols;
 
 struct net_segment_t
 {
@@ -239,6 +244,11 @@ void read_config()
 				int y = atoi(strtok(nullptr, " \t\r\n"));
 				std::tuple<int, int, int> key(b, x, y);
 				extra_bits.insert(key);
+			} else
+			if (!strcmp(tok, ".sym")) {
+				int net = atoi(strtok(nullptr, " \t\r\n"));
+				const char *name = strtok(nullptr, " \t\r\n");
+				net_symbols[net] = name;
 			}
 		} else
 		if (line_nr >= 0)
@@ -460,28 +470,43 @@ void read_chipdb()
 				std::pair<int, int>(x, y);
 	}
 
-
-#if 1
-	for (int net : used_nets)
+	if (verbose)
 	{
-		printf("// NET %d:\n", net);
-		for (auto seg : net_to_segments[net])
-			printf("//  SEG %d %d %s\n", seg.x, seg.y, seg.name.c_str());
-		for (auto other : net_buffers[net])
-			printf("//  BUFFER %d %d %d\n", connection_pos[std::pair<int, int>(net, other)].first,
-					connection_pos[std::pair<int, int>(net, other)].second, other);
-		for (auto other : net_rbuffers[net])
-			printf("//  RBUFFER %d %d %d\n", connection_pos[std::pair<int, int>(net, other)].first,
-					connection_pos[std::pair<int, int>(net, other)].second, other);
-		for (auto other : net_routing[net])
-			printf("//  ROUTE %d %d %d\n", connection_pos[std::pair<int, int>(net, other)].first,
-					connection_pos[std::pair<int, int>(net, other)].second, other);
+		for (int net : used_nets)
+		{
+			printf("// NET %d:\n", net);
+			for (auto seg : net_to_segments[net])
+				printf("//  SEG %d %d %s\n", seg.x, seg.y, seg.name.c_str());
+			for (auto other : net_buffers[net])
+				printf("//  BUFFER %d %d %d\n", connection_pos[std::pair<int, int>(net, other)].first,
+						connection_pos[std::pair<int, int>(net, other)].second, other);
+			for (auto other : net_rbuffers[net])
+				printf("//  RBUFFER %d %d %d\n", connection_pos[std::pair<int, int>(net, other)].first,
+						connection_pos[std::pair<int, int>(net, other)].second, other);
+			for (auto other : net_routing[net])
+				printf("//  ROUTE %d %d %d\n", connection_pos[std::pair<int, int>(net, other)].first,
+						connection_pos[std::pair<int, int>(net, other)].second, other);
+		}
 	}
-#endif
 }
 
 bool is_primary(std::string cell_name, std::string out_port)
 {
+	auto cell_type = netlist_cell_types[cell_name];
+
+	if (cell_type == "SB_RAM40_4K")
+		return true;
+
+	if (cell_type == "LogicCell40" && out_port == "lcout")
+	{
+		// SEQ_MODE = "4'bX...";
+		bool dff_enable = netlist_cell_params[cell_name]["SEQ_MODE"][3] == '1';
+		return dff_enable;
+	}
+
+	if (cell_type == "PRE_IO")
+		return true;
+
 	return false;
 }
 
@@ -556,7 +581,7 @@ const std::set<std::string> &get_inports(std::string cell_type)
 		inports_map["ICE_CARRY_IN_MUX"] = { "carryinitin" };
 
 		inports_map["LogicCell40"] = { "clk", "carryin", "in0", "in1", "in2", "in3", "sr", "ce" };
-		inports_map["PRE_IO"] = { "INPUTCLK", "OUTPUTCLK", "LATCHINPUTVALUE", "CLOCKENABLE", "OUTPUTENABLE", "DOUT1", "DOUT0" };
+		inports_map["PRE_IO"] = { "INPUTCLK", "OUTPUTCLK", "LATCHINPUTVALUE", "CLOCKENABLE", "OUTPUTENABLE", "DOUT1", "DOUT0", "PADIN" };
 
 		inports_map["SB_RAM40_4K"] = { "RCLK", "RCLKE", "RE", "WCLK", "WCLKE", "WE" };
 
@@ -569,6 +594,8 @@ const std::set<std::string> &get_inports(std::string cell_type)
 			inports_map["SB_RAM40_4K"].insert(stringf("RADDR[%d]", i));
 			inports_map["SB_RAM40_4K"].insert(stringf("WADDR[%d]", i));
 		}
+
+		inports_map["INTERCONN"] = { "I" };
 	}
 
 	if (inports_map.count(cell_type) == 0) {
@@ -579,9 +606,21 @@ const std::set<std::string> &get_inports(std::string cell_type)
 	return inports_map.at(cell_type);
 }
 
+#include "timings.inc"
+
 double get_delay(std::string cell_type, std::string in_port, std::string out_port)
 {
-	return 1.0;
+	if (cell_type == "INTERCONN")
+		return 0;
+
+	if (config_device == "1k")
+		return get_delay_1k(cell_type, in_port, out_port);
+
+	if (config_device == "8k")
+		return get_delay_8k(cell_type, in_port, out_port);
+
+	fprintf(stderr, "No built-in timing database for '%s' devices!\n", config_device.c_str());
+	exit(1);
 }
 
 struct TimingAnalysis
@@ -589,12 +628,18 @@ struct TimingAnalysis
 	// net_driver[<net_name>] = { <cell_name>, <cell_port> }
 	std::map<std::string, std::pair<std::string, std::string>> net_driver;
 
+	// net_max_setup[<net_name>] = { <setup_time>, <cell_name>, <cell_port> }
+	std::map<std::string, std::tuple<double, std::string, std::string>> net_max_setup;
+
 	// net_max_path_parent[<net_name>] = { <parent_net>, <cell_name>, <inport>, <outport>, <delay> }
 	std::map<std::string, std::tuple<std::string, std::string, std::string, std::string, double>> net_max_path_parent;
 
 	std::map<std::string, double> net_max_path_delay;
 	std::string global_max_path_net;
 	double global_max_path_delay;
+
+	bool interior_timing;
+	std::set<std::string> interior_nets;
 
 	double calc_net_max_path_delay(const std::string &net)
 	{
@@ -604,24 +649,35 @@ struct TimingAnalysis
 		if (net_driver.count(net) == 0)
 			return 0;
 
-		double max_path_delay = 0;
+		double max_path_delay = -1e6;
 		net_max_path_delay[net] = 1e6;
 
 		auto &driver_cell = net_driver.at(net).first;
 		auto &driver_port = net_driver.at(net).second;
+		auto &driver_type = netlist_cell_types.at(driver_cell);
 
 		if (is_primary(driver_cell, driver_port)) {
-			net_max_path_delay[net] = 0;
-			return 0;
+			if (interior_timing && driver_type == "PRE_IO")
+				net_max_path_delay[net] = -1e3;
+			else
+				net_max_path_delay[net] = get_delay(driver_type, "*clkedge*", driver_port) + GLOBAL_CLK_DIST_JITTER;
+			return net_max_path_delay[net];
 		}
 
-		auto &driver_type = netlist_cell_types.at(driver_cell);
-		auto &driver_inputs = get_inports(driver_type);
-
-		for (auto &inport : driver_inputs)
+		for (auto &inport : get_inports(driver_type))
 		{
-			if (inport == "clk" || inport == "INPUTCLK" || inport == "OUTPUTCLK")
+			if (inport == "clk" || inport == "INPUTCLK" || inport == "OUTPUTCLK" || inport == "PADIN")
 				continue;
+
+			if (driver_type == "LogicCell40" && driver_port == "carryout") {
+				if (inport == "in0" || inport == "in3")
+					continue;
+			}
+
+			if (driver_type == "LogicCell40" && (driver_port == "ltout" || driver_port == "lcout")) {
+				if (inport == "carryin")
+					continue;
+			}
 
 			std::string *in_net = &netlist_cell_ports.at(driver_cell).at(inport);
 			while (net_assignments.count(*in_net))
@@ -643,7 +699,20 @@ struct TimingAnalysis
 		return net_max_path_delay.at(net);
 	}
 
-	TimingAnalysis()
+	void mark_interior(std::string net)
+	{
+		if (net.empty())
+			return;
+
+		while (net_assignments.count(net)) {
+			interior_nets.insert(net);
+			net = net_assignments.at(net);
+		}
+
+		interior_nets.insert(net);
+	}
+
+	TimingAnalysis(bool interior_timing) : interior_timing(interior_timing)
 	{
 		std::set<std::string> all_nets;
 
@@ -657,8 +726,22 @@ struct TimingAnalysis
 			if (net_name == "")
 				continue;
 
-			if (get_inports(netlist_cell_types.at(cell_name)).count(port_name))
+			auto &cell_type = netlist_cell_types.at(cell_name);
+
+			if (get_inports(cell_type).count(port_name)) {
+				std::string n = net_name;
+				while (1) {
+					double setup_time = get_delay(cell_type, port_name, "*setup*");
+					if (setup_time >= std::get<0>(net_max_setup[n]))
+						net_max_setup[n] = std::make_tuple(setup_time, cell_name, port_name);
+					if (net_assignments.count(n) == 0)
+						break;
+					n = net_assignments.at(n);
+				}
+				if (interior_timing && cell_type != "PRE_IO" && is_primary(cell_name, "lcout"))
+					mark_interior(net_name);
 				continue;
+			}
 
 			net_driver[net_name] = { cell_name, port_name };
 			all_nets.insert(net_name);
@@ -667,7 +750,9 @@ struct TimingAnalysis
 		global_max_path_delay = 0;
 
 		for (auto &net : all_nets) {
-			double d = calc_net_max_path_delay(net);
+			if (interior_timing && interior_nets.count(net) == 0)
+				continue;
+			double d = calc_net_max_path_delay(net) + std::get<0>(net_max_setup[net]);
 			if (d > global_max_path_delay) {
 				global_max_path_delay = d;
 				global_max_path_net = net;
@@ -675,18 +760,83 @@ struct TimingAnalysis
 		}
 	}
 
-	void report()
+	void report(std::string n = std::string())
 	{
 		std::vector<std::string> lines;
 		std::set<std::string> visited_nets;
 
-		std::string n = global_max_path_net;
+		if (n.empty()) {
+			n = global_max_path_net;
+			int i = fprintf(frpt, "Report for critical path:\n");
+			while (--i) fputc('-', frpt);
+			fprintf(frpt, "\n\n");
+		} else {
+			int i = fprintf(frpt, "Report for %s:\n", n.c_str());
+			while (--i) fputc('-', frpt);
+			fprintf(frpt, "\n\n");
+		}
+
+		if (net_max_path_delay.count(n) == 0) {
+			fprintf(stderr, "Net not found: %s\n", n.c_str());
+			exit(1);
+		}
+
+		double delay = net_max_path_delay.at(n);
+
+		std::string net_sym;
+		std::vector<std::pair<double, std::string>> sym_list;
+		std::map<std::string, std::string> outsym_list;
+
+		int logic_levels = 0;
 		bool last_line = true;
+
+		auto &user = net_max_setup[n];
+
+		if (!std::get<1>(user).empty())
+		{
+			lines.push_back(stringf("        %s (%s) %s [setup]: %.3f ns", std::get<1>(user).c_str(),
+					netlist_cell_types.at(std::get<1>(user)).c_str(), std::get<2>(user).c_str(), std::get<0>(user)));
+			delay += std::get<0>(user);
+
+			auto &inports = get_inports(netlist_cell_types.at(std::get<1>(user)));
+
+			for (auto &it : netlist_cell_ports.at(std::get<1>(user)))
+			{
+				if (inports.count(it.first) || it.second.empty())
+					continue;
+
+				int netidx;
+				char dummy_ch;
+				if (sscanf(it.second.c_str(), "net_%d%c", &netidx, &dummy_ch) == 1 && net_symbols.count(netidx))
+					outsym_list[it.first] = net_symbols[netidx];
+			}
+		}
 
 		while (1)
 		{
-			if (net_max_path_parent.count(n) == 0) {
+			int netidx;
+			char dummy_ch;
+
+			if (sscanf(n.c_str(), "net_%d%c", &netidx, &dummy_ch) == 1 && net_symbols.count(netidx)) {
+				sym_list.push_back(std::make_pair(calc_net_max_path_delay(n), net_symbols[netidx]));
+				if (net_sym.empty() || net_sym[0] == '$')
+					net_sym = sym_list.back().second;
+			}
+
+			if (net_max_path_parent.count(n) == 0)
+			{
 				lines.push_back(stringf("%10.3f ns %s", calc_net_max_path_delay(n), n.c_str()));
+
+				if (!net_sym.empty()) {
+					lines.back() += stringf(" (%s)", net_sym.c_str());
+					net_sym.clear();
+				}
+
+				auto &driver_cell = net_driver.at(n).first;
+				auto &driver_port = net_driver.at(n).second;
+				auto &driver_type = netlist_cell_types.at(driver_cell);
+				lines.push_back(stringf("        %s (%s) [clk] -> %s: %.3f ns", driver_cell.c_str(),
+						driver_type.c_str(), driver_port.c_str(), calc_net_max_path_delay(n)));
 				break;
 			}
 
@@ -698,7 +848,15 @@ struct TimingAnalysis
 			auto &entry = net_max_path_parent.at(n);
 
 			if (last_line || netlist_cell_types.at(std::get<1>(entry)) == "LogicCell40")
+			{
 				lines.push_back(stringf("%10.3f ns %s", calc_net_max_path_delay(n), n.c_str()));
+				logic_levels++;
+
+				if (!net_sym.empty()) {
+					lines.back() += stringf(" (%s)", net_sym.c_str());
+					net_sym.clear();
+				}
+			}
 
 			lines.push_back(stringf("        %s (%s) %s -> %s: %.3f ns", std::get<1>(entry).c_str(),
 					netlist_cell_types.at(std::get<1>(entry)).c_str(), std::get<2>(entry).c_str(),
@@ -710,7 +868,37 @@ struct TimingAnalysis
 		}
 
 		for (int i = int(lines.size())-1; i >= 0; i--)
-			printf("%s\n", lines[i].c_str());
+			fprintf(frpt, "%s\n", lines[i].c_str());
+
+		if (!sym_list.empty() || !outsym_list.empty())
+		{
+			fprintf(frpt, "\n");
+			fprintf(frpt, "Resolvable net names on path:\n");
+
+			std::string last_net;
+			double first_time, last_time;
+
+			for (int i = int(sym_list.size())-1; i >= 0; i--) {
+				if (last_net != sym_list[i].second) {
+					if (!last_net.empty())
+						fprintf(frpt, "%10.3f ns ..%7.3f ns %s\n", first_time, last_time, last_net.c_str());
+					first_time = sym_list[i].first;
+					last_net = sym_list[i].second;
+				}
+				last_time = sym_list[i].first;
+			}
+
+			if (!last_net.empty())
+				fprintf(frpt, "%10.3f ns ..%7.3f ns %s\n", first_time, last_time, last_net.c_str());
+
+			for (auto &it : outsym_list)
+				fprintf(frpt, "%23s -> %s\n", it.first.c_str(), it.second.c_str());
+		}
+
+		fprintf(frpt, "\n");
+		fprintf(frpt, "Total number of logic levels: %d\n", logic_levels);
+		fprintf(frpt, "Total path delay: %.2f ns (%.2f MHz)\n", delay, 1000.0 / delay);
+		fprintf(frpt, "\n");
 	}
 };
 
@@ -1348,7 +1536,7 @@ struct make_interconn_worker_t
 				cell_log[trg] = std::make_pair(*cursor, "IoSpan4Mux");
 			} else {
 				tn = tname();
-				netlist_cell_types[tn] = stringf("Span4Mux_%c%d", horiz ? 'h' : 'v', MAX_SPAN_HACK ? 4 : count_length);
+				netlist_cell_types[tn] = stringf("Span4Mux_%c%d", horiz ? 'h' : 'v', max_span_hack ? 4 : count_length);
 				netlist_cell_ports[tn]["I"] = seg_name(*cursor);
 				netlist_cell_ports[tn]["O"] = seg_name(trg);
 				cell_log[trg] = std::make_pair(*cursor, stringf("Span4Mux_%c%d", horiz ? 'h' : 'v', count_length));
@@ -1376,7 +1564,7 @@ struct make_interconn_worker_t
 			count_length = std::max(count_length, 0);
 
 			tn = tname();
-			netlist_cell_types[tn] = stringf("Span12Mux_%c%d", horiz ? 'h' : 'v', MAX_SPAN_HACK ? 12 : count_length);
+			netlist_cell_types[tn] = stringf("Span12Mux_%c%d", horiz ? 'h' : 'v', max_span_hack ? 12 : count_length);
 			netlist_cell_ports[tn]["I"] = seg_name(*cursor);
 			netlist_cell_ports[tn]["O"] = seg_name(trg);
 			cell_log[trg] = std::make_pair(*cursor, stringf("Span12Mux_%c%d", horiz ? 'h' : 'v', count_length));
@@ -1517,27 +1705,28 @@ void make_interconn(const net_segment_t &src, FILE *graph_f)
 	worker.build_net_tree(src.net);
 	worker.build_seg_tree(src);
 
-#if 1
-	printf("// INTERCONN %d %d %s %d\n", src.x, src.y, src.name.c_str(), src.net);
-	std::function<void(int,int)> print_net_tree = [&] (int net, int indent) {
-		printf("// %*sNET_TREE %d\n", indent, "", net);
-		for (int child : worker.net_tree.at(net))
-			print_net_tree(child, indent+2);
-	};
-	std::function<void(const net_segment_t&,int,bool)> print_seg_tree = [&] (const net_segment_t &seg, int indent, bool chain) {
-		printf("// %*sSEG_TREE %d %d %s %d\n", indent, chain ? "`" : "", seg.x, seg.y, seg.name.c_str(), seg.net);
-		if (worker.seg_tree.count(seg)) {
-			auto &children = worker.seg_tree.at(seg);
-			bool child_chain = children.size() == 1;
-			for (auto &child : children)
-				print_seg_tree(child, child_chain ? (chain ? indent : indent+1) : indent+2, child_chain);
-		} else {
-			printf("// %*s  DEAD_END (!)\n", indent, "");
-		}
-	};
-	print_net_tree(src.net, 2);
-	print_seg_tree(src, 2, false);
-#endif
+	if (verbose)
+	{
+		printf("// INTERCONN %d %d %s %d\n", src.x, src.y, src.name.c_str(), src.net);
+		std::function<void(int,int)> print_net_tree = [&] (int net, int indent) {
+			printf("// %*sNET_TREE %d\n", indent, "", net);
+			for (int child : worker.net_tree.at(net))
+				print_net_tree(child, indent+2);
+		};
+		std::function<void(const net_segment_t&,int,bool)> print_seg_tree = [&] (const net_segment_t &seg, int indent, bool chain) {
+			printf("// %*sSEG_TREE %d %d %s %d\n", indent, chain ? "`" : "", seg.x, seg.y, seg.name.c_str(), seg.net);
+			if (worker.seg_tree.count(seg)) {
+				auto &children = worker.seg_tree.at(seg);
+				bool child_chain = children.size() == 1;
+				for (auto &child : children)
+					print_seg_tree(child, child_chain ? (chain ? indent : indent+1) : indent+2, child_chain);
+			} else {
+				printf("// %*s  DEAD_END (!)\n", indent, "");
+			}
+		};
+		print_net_tree(src.net, 2);
+		print_seg_tree(src, 2, false);
+	}
 
 	for (auto &seg : worker.target_segs) {
 		net_assignments[net_name(seg.net)] = seg_name(seg);
@@ -1554,7 +1743,7 @@ void make_interconn(const net_segment_t &src, FILE *graph_f)
 void help(const char *cmd)
 {
 	printf("\n");
-	printf("Usage: %s [options] input.asc [output.v]\n", cmd);
+	printf("Usage: %s [options] input.asc\n", cmd);
 	printf("\n");
 	printf("    -p <pcf_file>\n");
 	printf("    -P <chip_package>\n");
@@ -1564,18 +1753,45 @@ void help(const char *cmd)
 	printf("        write a graphviz description of the interconnect tree\n");
 	printf("        that includes the given net to 'icetime_graph.dot'.\n");
 	printf("\n");
+	printf("    -o <output_file>\n");
+	printf("        write verilog netlist to the file. use '-' for stdout\n");
+	printf("\n");
+	printf("    -r <output_file>\n");
+	printf("        write timing report to the file (instead of stdout)\n");
+	printf("\n");
+	printf("    -m\n");
+	printf("        enable max_span_hack for conservative timing estimates\n");
+	printf("\n");
+	printf("    -i\n");
+	printf("        only consider interior timing paths (not to/from IOs)\n");
+	printf("\n");
+	printf("    -t\n");
+	printf("        print a timing estimate (based on topological timing\n");
+	printf("        analysis)\n");
+	printf("\n");
+	printf("    -T <net_name>\n");
+	printf("        print a timing estimate for the specified net\n");
+	printf("\n");
+	printf("    -v\n");
+	printf("        verbose mode (print all interconnect trees)\n");
+	printf("\n");
 	exit(1);
 }
 
 int main(int argc, char **argv)
 {
+	bool print_timing = false;
+	bool interior_timing = false;
+	std::vector<std::string> print_timing_nets;
+
 	int opt;
-	while ((opt = getopt(argc, argv, "p:P:g:")) != -1)
+	while ((opt = getopt(argc, argv, "p:P:g:o:r:mitT:v")) != -1)
 	{
 		switch (opt)
 		{
 		case 'p':
 			printf("// Reading input .pcf file..\n");
+			fflush(stdout);
 			read_pcf(optarg);
 			break;
 		case 'P':
@@ -1583,6 +1799,37 @@ int main(int argc, char **argv)
 			break;
 		case 'g':
 			graph_nets.insert(atoi(optarg));
+			break;
+		case 'o':
+			if (!strcmp(optarg, "-")) {
+				fout = stdout;
+			} else {
+				fout = fopen(optarg, "w");
+				if (fout == nullptr) {
+					perror("Can't open output file");
+					exit(1);
+				}
+			}
+		case 'r':
+			frpt = fopen(optarg, "w");
+			if (frpt == nullptr) {
+				perror("Can't open report file");
+				exit(1);
+			}
+		case 'm':
+			max_span_hack = true;
+			break;
+		case 'i':
+			interior_timing = true;
+			break;
+		case 't':
+			print_timing = true;
+			break;
+		case 'T':
+			print_timing_nets.push_back(optarg);
+			break;
+		case 'v':
+			verbose = true;
 			break;
 		default:
 			help(argv[0]);
@@ -1595,27 +1842,19 @@ int main(int argc, char **argv)
 			perror("Can't open input file");
 			exit(1);
 		}
-		fout = stdout;
-	} else
-	if (optind+2 == argc) {
-		fin = fopen(argv[optind], "r");
-		if (fin == nullptr) {
-			perror("Can't open input file");
-			exit(1);
-		}
-		fout = fopen(argv[optind+1], "w");
-		if (fout == nullptr) {
-			perror("Can't open output file");
-			exit(1);
-		}
 	} else
 		help(argv[0]);
 
 	printf("// Reading input .asc file..\n");
+	fflush(stdout);
 	read_config();
 
-	printf("// Reading chipdb file..\n");
+	printf("// Reading %s chipdb file..\n", config_device.c_str());
+	fflush(stdout);
 	read_chipdb();
+
+	printf("// Creating timing netlist..\n");
+	fflush(stdout);
 
 	for (int net : used_nets)
 	for (auto &seg : net_to_segments[net])
@@ -1731,84 +1970,114 @@ int main(int argc, char **argv)
 			extra_wires.insert(port.second);
 		}
 
-	fprintf(fout, "module chip (");
-	const char *io_sep = "";
-	for (auto io : io_names) {
-		fprintf(fout, "%s%s", io_sep, io.c_str());
-		io_sep = ", ";
-	}
-	fprintf(fout, ");\n");
-
-	for (int net : declared_nets)
-		fprintf(fout, "  wire net_%d;\n", net);
-
-	for (auto net : extra_wires)
-		fprintf(fout, "  wire %s;\n", net.c_str());
-	
-	for (auto &it : net_assignments)
-		fprintf(fout, "  assign %s = %s;\n", it.first.c_str(), it.second.c_str());
-
-	fprintf(fout, "  wire gnd, vcc;\n");
-	fprintf(fout, "  GND gnd_cell (.Y(gnd));\n");
-	fprintf(fout, "  VCC vcc_cell (.Y(vcc));\n");
-
-	for (auto &str : extra_vlog)
-		fprintf(fout, "%s", str.c_str());
-
-	for (auto it : netlist_cell_types)
+	if (fout != NULL)
 	{
-		const char *sep = "";
-		fprintf(fout, "  %s ", it.second.c_str());
-		if (netlist_cell_params.count(it.first)) {
-			fprintf(fout, "#(");
-			for (auto port : netlist_cell_params[it.first]) {
+		fprintf(fout, "module chip (");
+		const char *io_sep = "";
+		for (auto io : io_names) {
+			fprintf(fout, "%s%s", io_sep, io.c_str());
+			io_sep = ", ";
+		}
+		fprintf(fout, ");\n");
+
+		for (int net : declared_nets)
+			fprintf(fout, "  wire net_%d;\n", net);
+
+		for (auto net : extra_wires)
+			fprintf(fout, "  wire %s;\n", net.c_str());
+
+		for (auto &it : net_assignments)
+			fprintf(fout, "  assign %s = %s;\n", it.first.c_str(), it.second.c_str());
+
+		fprintf(fout, "  wire gnd, vcc;\n");
+		fprintf(fout, "  GND gnd_cell (.Y(gnd));\n");
+		fprintf(fout, "  VCC vcc_cell (.Y(vcc));\n");
+
+		for (auto &str : extra_vlog)
+			fprintf(fout, "%s", str.c_str());
+
+		for (auto it : netlist_cell_types)
+		{
+			const char *sep = "";
+			fprintf(fout, "  %s ", it.second.c_str());
+			if (netlist_cell_params.count(it.first)) {
+				fprintf(fout, "#(");
+				for (auto port : netlist_cell_params[it.first]) {
+					fprintf(fout, "%s\n    .%s(%s)", sep, port.first.c_str(), port.second.c_str());
+					sep = ",";
+				}
+				fprintf(fout, "\n  ) ");
+				sep = "";
+			}
+
+			fprintf(fout, "%s (", it.first.c_str());
+			std::map<std::string, std::vector<std::string>> multibit_ports;
+
+			for (auto port : netlist_cell_ports[it.first])
+			{
+				size_t open_bracket_pos = port.first.find('[');
+				if (open_bracket_pos != std::string::npos) {
+					std::string base_name = port.first.substr(0, open_bracket_pos);
+					int bit_index = atoi(port.first.substr(open_bracket_pos+1).c_str());
+					if (multibit_ports[base_name].size() <= bit_index)
+						multibit_ports[base_name].resize(bit_index+1);
+					multibit_ports[base_name][bit_index] = port.second;
+					continue;
+				}
+
 				fprintf(fout, "%s\n    .%s(%s)", sep, port.first.c_str(), port.second.c_str());
 				sep = ",";
 			}
-			fprintf(fout, "\n  ) ");
-			sep = "";
-		}
 
-		fprintf(fout, "%s (", it.first.c_str());
-		std::map<std::string, std::vector<std::string>> multibit_ports;
+			for (auto it : multibit_ports)
+			{
+				fprintf(fout, "%s\n    .%s({", sep, it.first.c_str());
+				sep = ",";
 
-		for (auto port : netlist_cell_ports[it.first])
-		{
-			size_t open_bracket_pos = port.first.find('[');
-			if (open_bracket_pos != std::string::npos) {
-				std::string base_name = port.first.substr(0, open_bracket_pos);
-				int bit_index = atoi(port.first.substr(open_bracket_pos+1).c_str());
-				if (multibit_ports[base_name].size() <= bit_index)
-					multibit_ports[base_name].resize(bit_index+1);
-				multibit_ports[base_name][bit_index] = port.second;
-				continue;
+				const char *sepsep = "";
+				for (int i = int(it.second.size())-1; i >= 0; i--) {
+					std::string wire_name = it.second[i];
+					fprintf(fout, "%s%s", sepsep, wire_name.c_str());
+					sepsep = ", ";
+				}
+				fprintf(fout, "})");
 			}
 
-			fprintf(fout, "%s\n    .%s(%s)", sep, port.first.c_str(), port.second.c_str());
-			sep = ",";
+			fprintf(fout, "\n  );\n");
 		}
 
-		for (auto it : multibit_ports)
-		{
-			fprintf(fout, "%s\n    .%s({", sep, it.first.c_str());
-			sep = ",";
-
-			const char *sepsep = "";
-			for (int i = int(it.second.size())-1; i >= 0; i--) {
-				std::string wire_name = it.second[i];
-				fprintf(fout, "%s%s", sepsep, wire_name.c_str());
-				sepsep = ", ";
-			}
-			fprintf(fout, "})");
-		}
-
-		fprintf(fout, "\n  );\n");
+		fprintf(fout, "endmodule\n");
 	}
 
-	fprintf(fout, "endmodule\n");
+	if (print_timing || !print_timing_nets.empty())
+	{
+		TimingAnalysis ta(interior_timing);
 
-	TimingAnalysis ta;
-	ta.report();
+		if (frpt == nullptr)
+			frpt = stdout;
+		else
+			printf("// Timing estimate: %.2f ns (%.2f MHz)\n", ta.global_max_path_delay, 1000.0 / ta.global_max_path_delay);
+
+		fprintf(frpt, "\n");
+		fprintf(frpt, "icetime topological timing analysis report\n");
+		fprintf(frpt, "==========================================\n");
+		fprintf(frpt, "\n");
+		fprintf(frpt, "Warning: This timing analysis report is an estimate!\n");
+		if (max_span_hack)
+			fprintf(frpt, "Info: max_span_hack is enabled: estimate is conservative.\n");
+		fprintf(frpt, "\n");
+
+		for (auto &n : print_timing_nets)
+			ta.report(n);
+
+		if (print_timing)
+			ta.report();
+	}
+	else
+	{
+		TimingAnalysis ta(interior_timing);
+		printf("// Timing estimate: %.2f ns (%.2f MHz)\n", ta.global_max_path_delay, 1000.0 / ta.global_max_path_delay);
+	}
 
 	return 0;
 }
